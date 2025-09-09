@@ -28,7 +28,8 @@ WORKDIR /app
 
 # 5) Copiar package.json e instalar dependencias Node (producción)
 COPY package*.json ./
-# Si tienes package-lock.json preferible usar npm ci
+
+# Preferible usar npm ci
 RUN if [ -f package-lock.json ]; then npm ci --production; else npm install --production; fi
 
 # 6) Copiar el resto de archivos (incluye index.js)

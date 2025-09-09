@@ -34,6 +34,12 @@ const ENQUEUE_DELAY_MS = 450;
 const YT_DLP_BACKOFF_MS = 500;
 const MAX_PLAY_RETRIES = 6;
 
+// Variable global para control de interrupciones
+const globalInterrupt = {
+  enabled: false,
+  guildId: null
+};
+
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 /**
@@ -107,9 +113,17 @@ function sanitizeYouTubeUrl(url) {
 async function getPlaylistItems(url) {
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
-      // Usamos el módulo de Python/yt_dlp para compatibilidad en sistemas donde
-      // el ejecutable pueda no llamarse 'yt-dlp'.
-      const out = await execFilePromise("python3", ["-m", "yt_dlp", "-j", "--flat-playlist", url]);
+      // Construir argumentos para yt-dlp
+      const args = ["-m", "yt_dlp", "-j", "--flat-playlist"];
+      
+      // Añadir cookies si están configuradas
+      if (process.env.YT_DLP_COOKIES) {
+        args.push("--cookies", process.env.YT_DLP_COOKIES);
+      }
+      
+      args.push(url);
+      
+      const out = await execFilePromise("python3", args);
       const lines = out.trim().split("\n").filter(Boolean);
 
       // Algunas líneas pueden ser warnings; intentar parsear JSON sólo donde aplique.
@@ -129,6 +143,12 @@ async function getPlaylistItems(url) {
         await sleep(YT_DLP_BACKOFF_MS + attempt * 300);
         continue;
       }
+      
+      // Manejar error de autenticación
+      if (msg && msg.includes("Sign in to confirm you're not a bot")) {
+        throw new Error("Error de autenticación de YouTube. Se requieren cookies. Contacta al administrador.");
+      }
+      
       console.warn(`getPlaylistItems error (intento ${attempt + 1}):`, msg);
       if (attempt === 2) throw new Error("No se pudo ejecutar yt-dlp después de varios intentos.");
     }
@@ -142,16 +162,33 @@ async function getPlaylistItems(url) {
 async function tryPlayWithRetries(videoUrl, channel, member, textChannel, maxAttempts = MAX_PLAY_RETRIES) {
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     try {
+      // Verificar si hay una interrupción global antes de cada intento
+      if (globalInterrupt.enabled && globalInterrupt.guildId === channel.guild.id) {
+        return { ok: false, err: "Interrupción global activada" };
+      }
+      
       await distube.play(channel, videoUrl, { textChannel, member, skip: false });
       return { ok: true };
     } catch (err) {
       const msg = err && (err.message || String(err));
       console.warn(`tryPlayWithRetries intento ${attempt + 1} para ${videoUrl} falló:`, msg);
+      
+      // Verificar si hay una interrupción global después de un error
+      if (globalInterrupt.enabled && globalInterrupt.guildId === channel.guild.id) {
+        return { ok: false, err: "Interrupción global activada" };
+      }
+      
       if (msg && (msg.includes("EBUSY") || /yt-dlp/i.test(msg) || /resource busy/i.test(msg) || /locked/i.test(msg))) {
         const wait = YT_DLP_BACKOFF_MS + attempt * 300;
         await sleep(wait);
         continue;
       }
+      
+      // Manejar error de autenticación
+      if (msg && msg.includes("Sign in to confirm you're not a bot")) {
+        return { ok: false, err: "Error de autenticación de YouTube. Se requieren cookies. Contacta al administrador." };
+      }
+      
       return { ok: false, err: msg || "Error desconocido" };
     }
   }
@@ -192,7 +229,16 @@ const client = new Client({
 
 // DisTube configurado para entornos Linux: ruta de ffmpeg configurable via FFMPEG_PATH
 const distube = new DisTube(client, {
-  plugins: [new YtDlpPlugin({ update: false })],
+  plugins: [new YtDlpPlugin({ 
+    update: false,
+    // Añadir opciones para cookies si están configuradas
+    ...(process.env.YT_DLP_COOKIES && { 
+      options: {
+        // Esto puede variar dependiendo de la versión de @distube/yt-dlp
+        // Algunas versiones permiten pasar opciones directamente a yt-dlp
+      } 
+    })
+  })],
   ffmpeg: process.env.FFMPEG_PATH || "/usr/bin/ffmpeg",
   nsfw: false
 });
@@ -227,6 +273,12 @@ distube
     } catch (e) {
       errorMessage = "No se pudo obtener información del error";
     }
+    
+    // Filtrar mensajes de error relacionados con cookies
+    if (errorMessage.includes("Sign in to confirm you're not a bot")) {
+      errorMessage = "Error de autenticación de YouTube. Se requieren cookies. Contacta al administrador.";
+    }
+    
     safeSend(channel, `❌ **ERROR**: ${errorMessage.substring(0, 1000)}`);
   });
 
@@ -318,6 +370,13 @@ client.on("messageCreate", async (message) => {
     if (!perms?.has(PermissionFlagsBits.Speak)) return message.reply("❌ No tengo permiso **Hablar** en ese canal.");
     await safeSend(message.channel, "🎵 **Iniciando prueba con lista de canciones...**");
     for (let i = 0; i < listaPruebas.length; i++) {
+      // Verificar interrupción global antes de cada canción
+      if (globalInterrupt.enabled && globalInterrupt.guildId === message.guildId) {
+        await safeSend(message.channel, "⛔ **Prueba interrumpida.**");
+        globalInterrupt.enabled = false;
+        return;
+      }
+      
       const url = listaPruebas[i];
       await safeSend(message.channel, `🔊 **Probando canción ${i + 1}/${listaPruebas.length}:** \`${url}\``);
       try {
@@ -353,24 +412,40 @@ client.on("messageCreate", async (message) => {
         await distube.play(channel, query, { textChannel: message.channel, member: message.member });
       } else {
         await safeSend(message.channel, `🔍 Buscando en YouTube: \`${query}\``);
-        const ytCommand = `python3 -m yt_dlp "ytsearch1:${query}" --get-id --no-warnings`;
-        exec(ytCommand, async (err, stdout, stderr) => {
-          if (err || !stdout) {
-            console.error("Error yt-dlp:", err || stderr);
+        
+        // Construir comando con soporte para cookies
+        const args = ["-m", "yt_dlp", `ytsearch1:${query}`, "--get-id", "--no-warnings"];
+        if (process.env.YT_DLP_COOKIES) {
+          args.push("--cookies", process.env.YT_DLP_COOKIES);
+        }
+        
+        try {
+          const stdout = await execFilePromise("python3", args);
+          const videoId = stdout.split("\n")[0].trim();
+          if (!videoId) {
             return safeSend(message.channel, `❌ No se encontraron resultados para: \`${query}\``);
           }
-          const videoId = stdout.split("\n")[0].trim();
           const url = `https://www.youtube.com/watch?v=${videoId}`;
-          try {
-            await distube.play(channel, url, { textChannel: message.channel, member: message.member });
-          } catch (playError) {
-            console.error("Error reproduciendo video:", playError);
-            safeSend(message.channel, `❌ Error al reproducir: ${playError.message || playError}`);
+          await distube.play(channel, url, { textChannel: message.channel, member: message.member });
+        } catch (err) {
+          console.error("Error yt-dlp:", err);
+          
+          // Manejar error de autenticación
+          if (err.message && err.message.includes("Sign in to confirm you're not a bot")) {
+            return safeSend(message.channel, "❌ Error de autenticación de YouTube. Se requieren cookies. Contacta al administrador.");
           }
-        });
+          
+          return safeSend(message.channel, `❌ Error en la búsqueda: ${err.message || err}`);
+        }
       }
     } catch (error) {
       console.error("Error en !play:", error);
+      
+      // Manejar error de autenticación
+      if (error.message && error.message.includes("Sign in to confirm you're not a bot")) {
+        return safeSend(message.channel, "❌ Error de autenticación de YouTube. Se requieren cookies. Contacta al administrador.");
+      }
+      
       await safeSend(message.channel, `❌ Error inesperado: ${error.message || error}`);
     }
     return;
@@ -449,16 +524,34 @@ client.on("messageCreate", async (message) => {
     return;
   }
 
-  // INTERRUPT
+  // INTERRUPT (global)
   if (cmd === "!interrupt") {
     try {
+      // Activar interrupción global para este servidor
+      globalInterrupt.enabled = true;
+      globalInterrupt.guildId = message.guildId;
+      
       const queue = distube.getQueue(message.guildId);
       if (queue) {
         queue.stop();
-        try { distube.voices.leave(message.guildId); } catch (e) { /* ignore */ }
+        try { 
+          distube.voices.leave(message.guildId); 
+        } catch (e) { 
+          console.error("Error al salir del canal de voz:", e);
+        }
       }
+      
       message.channel.send("⛔ **Interrupt ejecutado. Bot reiniciado.**");
       console.log("⚡ Interrupt ejecutado manualmente.");
+      
+      // Desactivar la interrupción después de 5 segundos
+      setTimeout(() => {
+        if (globalInterrupt.guildId === message.guildId) {
+          globalInterrupt.enabled = false;
+          globalInterrupt.guildId = null;
+          console.log("⚡ Interrupción global desactivada.");
+        }
+      }, 5000);
     } catch (err) {
       console.error("Error en !interrupt:", err);
       message.channel.send(`❌ Error en interrupt: ${err.message}`);
@@ -466,7 +559,7 @@ client.on("messageCreate", async (message) => {
     return;
   }
 
-  // PLAYLIST (robusto)
+  // PLAYLIST con soporte para interrupción global
   if (cmd === "!playlist") {
     const channel = message.member?.voice.channel;
     if (!channel) return message.reply("⚠️ Debes estar en un canal de voz.");
@@ -479,26 +572,66 @@ client.on("messageCreate", async (message) => {
     await safeSend(message.channel, `📃 Expandiendo playlist: \`${url}\``);
 
     let items;
-    try { items = await getPlaylistItems(url); }
-    catch (err) { console.error("Error obteniendo items de playlist:", err); return await safeSend(message.channel, `❌ No se pudo expandir la playlist: ${err?.message || err}`); }
+    try { 
+      items = await getPlaylistItems(url); 
+    } catch (err) { 
+      console.error("Error obteniendo items de playlist:", err);
+      
+      // Manejar error de autenticación
+      if (err.message && err.message.includes("Error de autenticación")) {
+        return await safeSend(message.channel, "❌ Error de autenticación de YouTube. Se requieren cookies. Contacta al administrador.");
+      }
+      
+      return await safeSend(message.channel, `❌ No se pudo expandir la playlist: ${err?.message || err}`);
+    }
 
     if (!items || items.length === 0) return await safeSend(message.channel, "❌ No se encontraron canciones en esa playlist.");
 
     let added = 0, skipped = 0, failed = [];
     for (let i = 0; i < items.length; i++) {
+      // Verificar interrupción global antes de procesar cada canción
+      if (globalInterrupt.enabled && globalInterrupt.guildId === message.guildId) {
+        await safeSend(message.channel, "⛔ **Playlist interrumpida.**");
+        globalInterrupt.enabled = false;
+        return;
+      }
+      
       const it = items[i];
       if (!it || !it.id) { skipped++; continue; }
       const videoUrl = `https://www.youtube.com/watch?v=${it.id}`;
 
       let addedThisSong = false;
       for (let attempt = 1; attempt <= 2; attempt++) {
+        // Verificar interrupción global antes de cada intento
+        if (globalInterrupt.enabled && globalInterrupt.guildId === message.guildId) {
+          await safeSend(message.channel, "⛔ **Playlist interrumpida.**");
+          globalInterrupt.enabled = false;
+          return;
+        }
+        
         const res = await tryPlayWithRetries(videoUrl, channel, message.member, message.channel, MAX_PLAY_RETRIES);
         if (res.ok) { added++; addedThisSong = true; break; }
-        else if (res.err && res.err.includes("EBUSY")) { console.warn(`⚠️ ${videoUrl} busy, reintentando (intento ${attempt})`); await sleep(500); continue; }
-        else { console.warn(`❌ Error con ${videoUrl}: ${res.err}`); await safeSend(message.channel, `❌ Error con canción #${i + 1}: ${res.err}`); break; }
+        else if (res.err && res.err.includes("EBUSY")) { 
+          console.warn(`⚠️ ${videoUrl} busy, reintentando (intento ${attempt})`); 
+          await sleep(500); 
+          continue; 
+        }
+        else if (res.err && res.err.includes("Interrupción global")) {
+          // Interrupción detectada durante el intento de reproducción
+          await safeSend(message.channel, "⛔ **Playlist interrumpida.**");
+          return;
+        }
+        else { 
+          console.warn(`❌ Error con ${videoUrl}: ${res.err}`); 
+          failed.push({ index: i + 1, id: it.id, error: res.err });
+          await safeSend(message.channel, `❌ Error con canción #${i + 1}: ${res.err}`); 
+          break; 
+        }
       }
 
       if (!addedThisSong) skipped++;
+      
+      // Pequeña pausa entre canciones para no saturar
       await sleep(ENQUEUE_DELAY_MS);
     }
 
@@ -518,6 +651,14 @@ client.once("ready", () => {
   console.log(`✅ Bot conectado como ${client.user.tag}`);
   console.log(`✅ FFmpeg configurado correctamente (ruta: ${process.env.FFMPEG_PATH || "/usr/bin/ffmpeg"})`);
   console.log(`✅ Lista de pruebas cargada con ${listaPruebas.length} canciones`);
+  
+  // Verificar si hay cookies configuradas
+  if (process.env.YT_DLP_COOKIES) {
+    console.log(`✅ Cookies de YouTube configuradas: ${process.env.YT_DLP_COOKIES}`);
+  } else {
+    console.warn("⚠️  No se encontraron cookies de YouTube. Algunos videos pueden requerir autenticación.");
+  }
+  
   client.user.setActivity("!help para comandos", { type: "LISTENING" });
 });
 
