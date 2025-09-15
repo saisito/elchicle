@@ -42,6 +42,11 @@ const globalInterrupt = {
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
+let playIntroFlag = true;
+
+// Intro song (2 segundos)
+const INTRO_URL = "https://youtu.be/E-hi_52A9MA?si=s0RcA0IW-bIN8Hfp";
+
 /**
  * Parsea varios formatos de tiempo a segundos.
  * Soporta: "HH:MM:SS", "MM:SS", "123" (segundos), y "1h2m3s".
@@ -298,7 +303,6 @@ client.on("messageCreate", async (message) => {
       .addFields(
         { name: "🎶 !play [url/búsqueda]", value: "Reproduce un enlace o hace una búsqueda en YT" },
         { name: "📃 !playlist [url]", value: "Carga una playlist de YouTube/YouTube Music en la cola" },
-        { name: "🧪 !elchicle", value: "Prueba rápida/diagnóstico" },
         { name: "⏭️ !skip", value: "Salta la canción actual" },
         { name: "🛑 !stop", value: "Detiene la reproducción y limpia la cola" },
         { name: "📋 !queue", value: "Muestra la cola de reproducción actual" },
@@ -360,57 +364,34 @@ client.on("messageCreate", async (message) => {
     return;
   }
 
-  // ELCHICLE (test rápido)
-  if (cmd === "!elchicle") {
-    const channel = message.member?.voice.channel;
-    if (!channel) return message.reply("⚠️ Debes estar en un canal de voz.");
-    const me = message.guild?.members?.me;
-    const perms = channel.permissionsFor(me ?? client.user.id);
-    if (!perms?.has(PermissionFlagsBits.Connect)) return message.reply("❌ No tengo permiso **Conectar** en ese canal.");
-    if (!perms?.has(PermissionFlagsBits.Speak)) return message.reply("❌ No tengo permiso **Hablar** en ese canal.");
-    await safeSend(message.channel, "🎵 **Iniciando prueba con lista de canciones...**");
-    for (let i = 0; i < listaPruebas.length; i++) {
-      // Verificar interrupción global antes de cada canción
-      if (globalInterrupt.enabled && globalInterrupt.guildId === message.guildId) {
-        await safeSend(message.channel, "⛔ **Prueba interrumpida.**");
-        globalInterrupt.enabled = false;
-        return;
-      }
-      
-      const url = listaPruebas[i];
-      await safeSend(message.channel, `🔊 **Probando canción ${i + 1}/${listaPruebas.length}:** \`${url}\``);
-      try {
-        await distube.play(channel, url, { textChannel: message.channel, member: message.member, skip: false });
-        await sleep(3000);
-      } catch (error) {
-        console.error("Error en prueba:", error);
-        await safeSend(message.channel, `❌ **Error con canción ${i + 1}:** ${error?.message || error}`);
-      }
-    }
-    await safeSend(message.channel, "✅ **Prueba completada.**");
-    return;
-  }
-
   // PLAY (url o búsqueda)
   if (cmd === "!play") {
-    const channel = message.member?.voice.channel;
-    if (!channel) return message.reply("⚠️ Debes estar en un canal de voz.");
-    const me = message.guild?.members?.me;
-    const perms = channel.permissionsFor(me ?? client.user.id);
-    if (!perms?.has(PermissionFlagsBits.Connect)) return message.reply("❌ No tengo permiso **Conectar**.");
-    if (!perms?.has(PermissionFlagsBits.Speak)) return message.reply("❌ No tengo permiso **Hablar**.");
+  const channel = message.member?.voice.channel;
+  if (!channel) return message.reply("⚠️ Debes estar en un canal de voz.");
+  const me = message.guild?.members?.me;
+  const perms = channel.permissionsFor(me ?? client.user.id);
+  if (!perms?.has(PermissionFlagsBits.Connect)) return message.reply("❌ No tengo permiso **Conectar**.");
+  if (!perms?.has(PermissionFlagsBits.Speak)) return message.reply("❌ No tengo permiso **Hablar**.");
 
-    let query = args.join(" ");
-    if (!query) return message.reply("⚠️ Debes escribir el nombre de la canción o artista.");
+  let query = args.join(" ");
+  if (!query) return message.reply("⚠️ Debes escribir el nombre de la canción o artista.");
+
+  try {
+    // 🔹 Intro check
+    if (playIntroFlag) {
+      playIntroFlag = false;
+      //await safeSend(message.channel, "🎬 Intro...");
+      await distube.play(channel, INTRO_URL, { member: message.member });
+      await sleep(1200); 
+    }
 
     let isUrl = false;
     try { new URL(query); isUrl = true; } catch (e) { isUrl = false; }
 
-    try {
-      if (isUrl) {
-        query = sanitizeYouTubeUrl(query);
-        await distube.play(channel, query, { textChannel: message.channel, member: message.member });
-      } else {
+    if (isUrl) {
+      query = sanitizeYouTubeUrl(query);
+      await distube.play(channel, query, { textChannel: message.channel, member: message.member });
+    } else {
         await safeSend(message.channel, `🔍 Buscando en YouTube: \`${query}\``);
         
         // Construir comando con soporte para cookies
@@ -525,51 +506,73 @@ client.on("messageCreate", async (message) => {
   }
 
   // INTERRUPT (global)
-  if (cmd === "!interrupt") {
-    try {
-      // Activar interrupción global para este servidor
-      globalInterrupt.enabled = true;
-      globalInterrupt.guildId = message.guildId;
-      
-      const queue = distube.getQueue(message.guildId);
-      if (queue) {
-        queue.stop();
-        try { 
-          distube.voices.leave(message.guildId); 
-        } catch (e) { 
-          console.error("Error al salir del canal de voz:", e);
-        }
+// INTERRUPT (global)
+if (cmd === "!interrupt") {
+  try {
+    globalInterrupt.enabled = true;
+    globalInterrupt.guildId = message.guildId;
+    playIntroFlag = true; // 🔹 Reiniciar flag para que el intro vuelva a sonar
+
+    const queue = distube.getQueue(message.guildId);
+    if (queue) {
+      queue.stop();
+      try { 
+        distube.voices.leave(message.guildId); 
+      } catch (e) { 
+        console.error("Error al salir del canal de voz:", e);
       }
-      
-      message.channel.send("⛔ **Interrupt ejecutado. Bot reiniciado.**");
-      console.log("⚡ Interrupt ejecutado manualmente.");
-      
-      // Desactivar la interrupción después de 5 segundos
-      setTimeout(() => {
-        if (globalInterrupt.guildId === message.guildId) {
-          globalInterrupt.enabled = false;
-          globalInterrupt.guildId = null;
-          console.log("⚡ Interrupción global desactivada.");
-        }
-      }, 5000);
-    } catch (err) {
-      console.error("Error en !interrupt:", err);
-      message.channel.send(`❌ Error en interrupt: ${err.message}`);
+    } else {
+      // 🔹 Forzar salida aunque no haya cola
+      try {
+        distube.voices.leave(message.guildId);
+      } catch (e) {
+        console.error("Error forzando desconexión:", e);
+      }
     }
-    return;
+
+    message.channel.send("⛔ **Interrupt ejecutado. Bot reiniciado.**");
+    console.log("⚡ Interrupt ejecutado manualmente.");
+
+    // Desactivar interrupción después de 5 segundos
+    setTimeout(() => {
+      if (globalInterrupt.guildId === message.guildId) {
+        globalInterrupt.enabled = false;
+        globalInterrupt.guildId = null;
+        console.log("⚡ Interrupción global desactivada.");
+      }
+    }, 5000);
+  } catch (err) {
+    console.error("Error en !interrupt:", err);
+    message.channel.send(`❌ Error en interrupt: ${err.message}`);
   }
+  return;
+}
+
 
   // PLAYLIST con soporte para interrupción global
   if (cmd === "!playlist") {
-    const channel = message.member?.voice.channel;
-    if (!channel) return message.reply("⚠️ Debes estar en un canal de voz.");
-    const url = args[0];
-    if (!url) return message.reply("⚠️ Debes pasar la URL de una playlist o álbum.");
-    const me = message.guild?.members?.me;
-    const perms = channel.permissionsFor(me ?? client.user.id);
-    if (!perms?.has(PermissionFlagsBits.Connect)) return message.reply("❌ No tengo permiso **Conectar**.");
-    if (!perms?.has(PermissionFlagsBits.Speak)) return message.reply("❌ No tengo permiso **Hablar**.");
-    await safeSend(message.channel, `📃 Expandiendo playlist: \`${url}\``);
+  const channel = message.member?.voice.channel;
+  if (!channel) return message.reply("⚠️ Debes estar en un canal de voz.");
+  const url = args[0];
+  if (!url) return message.reply("⚠️ Debes pasar la URL de una playlist o álbum.");
+  const me = message.guild?.members?.me;
+  const perms = channel.permissionsFor(me ?? client.user.id);
+  if (!perms?.has(PermissionFlagsBits.Connect)) return message.reply("❌ No tengo permiso **Conectar**.");
+  if (!perms?.has(PermissionFlagsBits.Speak)) return message.reply("❌ No tengo permiso **Hablar**.");
+
+  try {
+    // 🔹 Intro check
+    if (playIntroFlag) {
+      playIntroFlag = false;
+      //await safeSend(message.channel, "🎬 Intro...");
+      await distube.play(channel, INTRO_URL, { member: message.member });
+      await sleep(1200); 
+    }
+  } catch (err) {
+    console.error("Error reproduciendo intro:", err);
+  }
+
+  await safeSend(message.channel, `📃 Expandiendo playlist: \`${url}\``);
 
     let items;
     try { 
