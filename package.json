@@ -1,0 +1,27 @@
+{
+  "type": "module",
+  "name": "elchicle",
+  "version": "1.0.0",
+  "description": "Bot de música para Discord (DisTube + yt-dlp)",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "postinstall": "node ./scripts/patch-yt-dlp.js",
+    "test:ytdlp": "node ./scripts/test-ytdlp.js"
+  },
+  "dependencies": {
+    "@distube/yt-dlp": "2.0.1",
+    "@snazzah/davey": "0.1.7",
+    "discord.js": "14.14.1",
+    "distube": "5.0.7",
+    "dotenv": "16.4.5",
+    "yt-dlp-exec": "1.0.2",
+    "opusscript": "0.0.8"
+  },
+  "optionalDependencies": {},
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "devDependencies": {}
+  
+}

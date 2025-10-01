@@ -1,0 +1,38 @@
+diff --git a/node_modules/@distube/yt-dlp/dist/index.js b/node_modules/@distube/yt-dlp/dist/index.js
+index 6b2a2aa..0000000 100644
+--- a/node_modules/@distube/yt-dlp/dist/index.js
++++ b/node_modules/@distube/yt-dlp/dist/index.js
+@@
+ var json = /* @__PURE__ */ __name((url, flags, options) => {
+-  const process2 = (0, import_node_child_process.spawn)(YTDLP_PATH, args(url, flags), options);
+-  return new Promise((resolve, reject) => {
+-    let output = "";
+-    process2.stdout?.on("data", (chunk) => {
+-      output += chunk;
+-    });
+-    process2.stderr?.on("data", (chunk) => {
+-      output += chunk;
+-    });
+-    process2.on("close", (code) => {
+-      if (code === 0) resolve(JSON.parse(output));
+-      else reject(new Error(output));
+-    });
+-    process2.on("error", reject);
+-  });
++  const process2 = (0, import_node_child_process.spawn)(YTDLP_PATH, args(url, flags), options);
++  return new Promise((resolve, reject) => {
++    let stdout = "";
++    let stderr = "";
++    process2.stdout?.on("data", (chunk) => { stdout += chunk; });
++    process2.stderr?.on("data", (chunk) => { stderr += chunk; });
++    process2.on("close", (code) => {
++      if (code === 0) {
++        try { resolve(JSON.parse(stdout)); }
++        catch (e) { reject(new Error(stderr || stdout)); }
++      } else {
++        reject(new Error(stderr || stdout));
++      }
++    });
++    process2.on("error", reject);
++  });
+ }, "json");
