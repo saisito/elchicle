@@ -2,7 +2,24 @@ diff --git a/node_modules/@distube/yt-dlp/dist/index.js b/node_modules/@distube/
 index 6b2a2aa..0000000 100644
 --- a/node_modules/@distube/yt-dlp/dist/index.js
 +++ b/node_modules/@distube/yt-dlp/dist/index.js
-@@
+@@ -140,7 +140,6 @@ var YtDlpPlugin = class extends import_distube.PlayableExtractorPlugin {
+     const info = await json(url, {
+       dumpSingleJson: true,
+       noWarnings: true,
+-      noCallHome: true,
+       preferFreeFormats: true,
+       skipDownload: true,
+       simulate: true
+@@ -168,7 +167,6 @@ var YtDlpPlugin = class extends import_distube.PlayableExtractorPlugin {
+     const info = await json(song.url, {
+       dumpSingleJson: true,
+       noWarnings: true,
+-      noCallHome: true,
+       preferFreeFormats: true,
+       skipDownload: true,
+       simulate: true,
+@@ -180,16 +178,20 @@ var YtDlpPlugin = class extends import_distube.PlayableExtractorPlugin {
+ };
  var json = /* @__PURE__ */ __name((url, flags, options) => {
 -  const process2 = (0, import_node_child_process.spawn)(YTDLP_PATH, args(url, flags), options);
 -  return new Promise((resolve, reject) => {
