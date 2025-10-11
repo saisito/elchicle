@@ -24,3 +24,4 @@ Dockerfile*
 *.log
 *.tmp
 *.swp
+dev-env/

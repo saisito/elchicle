@@ -1,0 +1,40 @@
+version: '3.8'
+
+services:
+  elchicle:
+    build: .
+    image: elchicle:latest
+    container_name: elchicle-bot
+    restart: unless-stopped
+    environment:
+      - NODE_ENV=production
+      - DISCORD_TOKEN=${DISCORD_TOKEN}
+    ports:
+      - "3000:3000"
+    volumes:
+      # Opcional: Para logs persistentes
+      - ./logs:/app/logs
+    healthcheck:
+      test: ["CMD", "node", "--version"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+# Para desarrollo con hot reload
+  elchicle-dev:
+    build: .
+    image: elchicle:latest
+    container_name: elchicle-dev
+    restart: "no"
+    environment:
+      - NODE_ENV=development
+      - DISCORD_TOKEN=${DISCORD_TOKEN}
+    ports:
+      - "3000:3000"
+    volumes:
+      - .:/app
+      - /app/node_modules
+    profiles:
+      - dev
+    command: ["node", "--watch", "index.js"]
