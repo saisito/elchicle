@@ -1,15 +1,30 @@
-# Archivos de desarrollo y entorno local
-dev-env/
+# Node modules (se instalarán en el container)
 node_modules/
-npm-debug.log*
-yarn-error.log
+# No ignorar dev-env/ porque necesitamos su contenido para la imagen de producción
 
-# Archivos sensibles y configuración
-.env*
-!.env.example
+# Logs y archivos temporales
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+*.tmp
+*.swp
+*.bak
+logs/
+
+# Variables de entorno locales
+.env
+.env.local
+.env.development
+.env.production
+!.env.production.example
+
+# Archivos sensibles
 *.key
 *.pem
 config.json
+cookies/
+secrets/
 
 # Git y versionado
 .git/
@@ -26,33 +41,34 @@ config.json
 **/Thumbs.db
 desktop.ini
 
-# Logs y temporales
-*.log
-*.tmp
-*.swp
-*.bak
-logs/
-
-# Build y deployment
+# Build y deployment locales
 dist/
 build/
 coverage/
 .nyc_output/
+elchicle.zip
 
-# Docker
-Dockerfile*
-docker-compose*.yml
-!docker-compose.yml
+# Docker (mantener solo los necesarios)
+Dockerfile
+docker-compose.yml
+!Dockerfile.production
+!docker-compose.production.yml
 
-# Archivos multimedia de ejemplo (no necesarios en producción)
+# Archivos multimedia de ejemplo
 elchicleaudio.mp4
 elchicleaudio.webm
 luffy.jpg
 
-# Documentación de desarrollo
+# Documentación de desarrollo (excepto guías importantes)
+VPS-SETUP.md
 DOCKER.md
+YOUTUBE-DOCKER-FIX.md
+README.md
 build-docker.ps1
 verify-docker-files.ps1
+build-production.ps1
 
-# Otros archivos innecesarios
+# Archivos de desarrollo no necesarios en producción
 .npmrc
+railway.toml
+install.sh

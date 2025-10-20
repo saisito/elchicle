@@ -6,7 +6,7 @@
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
-    "postinstall": "node ./scripts/patch-yt-dlp.js",
+    "postinstall": "node ./scripts/patch-yt-dlp.js && node ./scripts/patch-advanced.js",
     "test:ytdlp": "node ./scripts/test-ytdlp.js"
   },
   "dependencies": {

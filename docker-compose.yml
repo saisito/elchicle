@@ -1,40 +1,58 @@
 version: '3.8'
 
 services:
-  elchicle:
-    build: .
-    image: elchicle:latest
-    container_name: elchicle-bot
+  elchicle-production:
+    build:
+      context: .
+      dockerfile: Dockerfile.production
+    image: elchicle:production
+    container_name: elchicle-production
     restart: unless-stopped
     environment:
       - NODE_ENV=production
-      - DISCORD_TOKEN=${DISCORD_TOKEN}
+      - TOKEN=${DISCORD_TOKEN}
+      - PORT=3000
+      # Variables para evitar detección de bot
+      - YT_DLP_USER_AGENT=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36
+      - YT_DLP_REFERER=https://www.youtube.com/
+      # Opcional: Ruta a archivo de cookies si tienes uno
+      # - YT_DLP_COOKIES=/app/cookies/youtube.txt
+      # Variables para Python/yt-dlp
+      - PYTHONWARNINGS=ignore
+      - YTDL_NO_UPDATE=1
+      - YT_DLP_NO_UPDATE=1
+      - PYTHONIOENCODING=utf-8
+      - LANG=C.UTF-8
+      - LC_ALL=C.UTF-8
     ports:
       - "3000:3000"
     volumes:
-      # Opcional: Para logs persistentes
+      # Opcional: Para persistir cookies de YouTube
+      - ./cookies:/app/cookies:ro
+      # Opcional: Para logs
       - ./logs:/app/logs
+    networks:
+      - elchicle-network
     healthcheck:
-      test: ["CMD", "node", "--version"]
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 40s
+    # Limitar recursos
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '0.5'
+        reservations:
+          memory: 256M
+          cpus: '0.25'
 
-# Para desarrollo con hot reload
-  elchicle-dev:
-    build: .
-    image: elchicle:latest
-    container_name: elchicle-dev
-    restart: "no"
-    environment:
-      - NODE_ENV=development
-      - DISCORD_TOKEN=${DISCORD_TOKEN}
-    ports:
-      - "3000:3000"
-    volumes:
-      - .:/app
-      - /app/node_modules
-    profiles:
-      - dev
-    command: ["node", "--watch", "index.js"]
+networks:
+  elchicle-network:
+    driver: bridge
+
+volumes:
+  elchicle-logs:
+    driver: local

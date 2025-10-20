@@ -3,6 +3,8 @@
 // Requisitos del host: ffmpeg y yt-dlp disponibles (o Python con módulo yt_dlp)
 
 import http from "http";
+import https from "https";
+import fs from "fs";
 import { execFile } from "child_process";
 import dotenv from "dotenv";
 import path from "path";
@@ -22,6 +24,51 @@ process.env.YTDLP_DISABLE_DOWNLOAD = process.env.YTDLP_DISABLE_DOWNLOAD || "true
 process.env.PYTHONIOENCODING = process.env.PYTHONIOENCODING || "utf-8"; // asegura encoding consistente
 process.env.LANG = process.env.LANG || "C.UTF-8";
 process.env.LC_ALL = process.env.LC_ALL || "C.UTF-8";
+
+// Configuraciones específicas para evitar opciones deprecadas
+process.env.YT_DLP_NO_CALL_HOME = "false"; // Evitar la opción --no-call-home deprecada
+process.env.YT_DLP_EXTRACT_FLAT = process.env.YT_DLP_EXTRACT_FLAT || "false";
+process.env.YT_DLP_IGNORE_ERRORS = process.env.YT_DLP_IGNORE_ERRORS || "true";
+process.env.YT_DLP_NO_WARNINGS = process.env.YT_DLP_NO_WARNINGS || "true";
+
+// Función para descargar cookies desde URL
+async function downloadCookies() {
+  const cookiesUrl = process.env.YT_DLP_COOKIES_URL;
+  if (!cookiesUrl) {
+    console.log("⚠️  No se configuró YT_DLP_COOKIES_URL, continuando sin cookies");
+    return;
+  }
+
+  try {
+    console.log("🍪 Descargando cookies desde:", cookiesUrl);
+    
+    const cookiesPath = "/app/cookies/youtube.txt";
+    const file = fs.createWriteStream(cookiesPath);
+    
+    const request = https.get(cookiesUrl, (response) => {
+      if (response.statusCode === 200) {
+        response.pipe(file);
+        file.on('finish', () => {
+          file.close();
+          console.log("✅ Cookies descargadas exitosamente");
+          // Configurar la variable para yt-dlp
+          process.env.YT_DLP_COOKIES = cookiesPath;
+        });
+      } else {
+        console.error("❌ Error descargando cookies, código:", response.statusCode);
+      }
+    });
+
+    request.on('error', (err) => {
+      console.error("❌ Error descargando cookies:", err.message);
+    });
+
+    // Esperar un poco para que las cookies se descarguen
+    await new Promise(resolve => setTimeout(resolve, 2000));
+  } catch (error) {
+    console.error("❌ Error configurando cookies:", error.message);
+  }
+}
 
 // Global error handlers to avoid silent exits
 process.on("unhandledRejection", (reason) => {
@@ -169,8 +216,10 @@ const client = new Client({
 const { YtDlpPlugin } = await import("@distube/yt-dlp");
 
 const distube = new DisTube(client, {
-  // Añadimos opciones conservadoras; el plugin heredará las env vars para su proceso hijo
-  plugins: [new YtDlpPlugin({ update: false })],
+  // Configuración simple - las opciones se pasan por variables de entorno
+  plugins: [new YtDlpPlugin({ 
+    update: false
+  })],
   ffmpeg: DEFAULT_FFMPEG,
   nsfw: false
 });
@@ -506,8 +555,16 @@ client.once("ready", () => {
   client.user.setActivity("!help para comandos", { type: "LISTENING" });
 });
 
-// Login
-client.login(TOKEN).catch(error => {
-  console.error("Error al conectar el bot:", error);
-  process.exit(1);
-});
+// Login con descarga de cookies
+(async () => {
+  try {
+    // Descargar cookies si está configurado
+    await downloadCookies();
+    
+    // Login del bot
+    await client.login(TOKEN);
+  } catch (error) {
+    console.error("Error al conectar el bot:", error);
+    process.exit(1);
+  }
+})();
