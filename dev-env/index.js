@@ -144,6 +144,7 @@ async function getPlaylistItems(url) {
         quiet: true,
         // Pasar cookies si existen
         ...(process.env.YT_DLP_COOKIES ? { cookies: process.env.YT_DLP_COOKIES } : {}),
+        ...(process.env.YT_DLP_USER_AGENT ? { userAgent: process.env.YT_DLP_USER_AGENT } : {}),
       };
       let out;
       try {
@@ -152,6 +153,7 @@ async function getPlaylistItems(url) {
         // Fallback a Python (por compatibilidad con algunos deploys)
         const args = ["-m", "yt_dlp", "-J", "--flat-playlist", "--no-warnings", url];
         if (process.env.YT_DLP_COOKIES) args.splice(3, 0, "--cookies", process.env.YT_DLP_COOKIES);
+  if (process.env.YT_DLP_USER_AGENT) args.splice(3, 0, "--user-agent", process.env.YT_DLP_USER_AGENT);
         out = await execFilePromise(PYTHON_CMD, isWindows ? ["-3", ...args] : args);
       }
       const parsed = typeof out === "string" ? JSON.parse(out) : out;
@@ -211,6 +213,28 @@ const client = new Client({
     GatewayIntentBits.MessageContent
   ]
 });
+
+// Si el entrypoint ya descargó/filtró cookies en /app/cookies/youtube.txt, expónlas
+// a yt-dlp antes de instanciar el plugin para que éste pase --cookies automáticamente.
+try {
+  // Intentar descargar cookies en runtime (si YT_DLP_COOKIES_URL está configurada).
+  // Hacemos esto antes de importar/instanciar el plugin para asegurarnos de que
+  // la variable de entorno YT_DLP_COOKIES esté disponible cuando YtDlpPlugin
+  // construya sus argumentos y pase --cookies a yt-dlp.
+  try {
+    await downloadCookies();
+  } catch (e) {
+    console.warn("⚠️ downloadCookies falló o no estaba configurado; continuando:", e?.message || e);
+  }
+
+  const possible = "/app/cookies/youtube.txt";
+  if (fs.existsSync(possible)) {
+    process.env.YT_DLP_COOKIES = process.env.YT_DLP_COOKIES || possible;
+    console.log(`⚙️ Detected cookies file at ${possible}, setting YT_DLP_COOKIES env var`);
+  }
+} catch (e) {
+  // ignore
+}
 
 // Importar el plugin dinámicamente DESPUÉS de configurar env vars para evitar que se impriman warnings
 const { YtDlpPlugin } = await import("@distube/yt-dlp");
@@ -384,6 +408,7 @@ client.on("messageCreate", async (message) => {
             noWarnings: true,
             quiet: true,
             ...(process.env.YT_DLP_COOKIES ? { cookies: process.env.YT_DLP_COOKIES } : {}),
+            ...(process.env.YT_DLP_USER_AGENT ? { userAgent: process.env.YT_DLP_USER_AGENT } : {}),
           });
           const parsed = typeof out === "string" ? JSON.parse(out) : out;
           const videoId = parsed?.entries?.[0]?.id || parsed?.id;
@@ -558,10 +583,7 @@ client.once("ready", () => {
 // Login con descarga de cookies
 (async () => {
   try {
-    // Descargar cookies si está configurado
-    await downloadCookies();
-    
-    // Login del bot
+    // Login del bot (las cookies ya se descargaron antes de instanciar el plugin)
     await client.login(TOKEN);
   } catch (error) {
     console.error("Error al conectar el bot:", error);

@@ -49,10 +49,8 @@ coverage/
 elchicle.zip
 
 # Docker (mantener solo los necesarios)
-Dockerfile
 docker-compose.yml
-!Dockerfile.production
-!docker-compose.production.yml
+docker-compose.*.yml
 
 # Archivos multimedia de ejemplo
 elchicleaudio.mp4
