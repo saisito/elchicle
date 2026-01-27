@@ -8,7 +8,7 @@ Tu token de Discord bot. Obténlo de: https://discord.com/developers/application
 ### 2. YT_DLP_COOKIES_URL (OBLIGATORIO)
 URL raw de tu archivo de cookies de YouTube.
 
-**Formato correcto**: `https://gist.githubusercontent.com/USUARIO/ID_GIST/raw/cookies.txt`
+**URL configurada**: `https://gist.githubusercontent.com/saisito/e14d2a27b8deeaf6ad6f28f092612868/raw/cookies.txt`
 
 **Cómo obtener cookies:**
 1. Instala extensión "Get cookies.txt LOCALLY" en Chrome/Firefox
