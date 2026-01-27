@@ -62,13 +62,13 @@ if [ -f "${COOKIES_PATH}" ]; then
   head -n 3 "${COOKIES_PATH}" 2>/dev/null || echo "(cannot preview)"
   echo "[entrypoint] ============================================"
   
-  # Attempt to filter the cookies file to keep only YouTube-related domains
-  if command -v python3 >/dev/null 2>&1 && [ -f /usr/local/bin/filter_cookies.py ]; then
+  # Attempt to filter the cookies file to keep only YouTube-related domains (skip if read-only)
+  if command -v python3 >/dev/null 2>&1 && [ -f /usr/local/bin/filter_cookies.py ] && [ -w "${COOKIES_PATH}" ]; then
     echo "[entrypoint] Filtering cookies to keep only YouTube-related domains..."
     python3 /usr/local/bin/filter_cookies.py "${COOKIES_PATH}" --domains "youtube.com,youtube-nocookie.com,googlevideo.com,google.com" || true
     echo "[entrypoint] ✅ Filtering complete"
   else
-    echo "[entrypoint] ⚠️  Filter script not available or python3 missing; skipping filter"
+    echo "[entrypoint] ⚠️  Skipping filter (file is read-only or script not available)"
   fi
   
   # Set environment variable for the application
