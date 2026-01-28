@@ -268,22 +268,12 @@ const { YtDlpPlugin } = await import("@distube/yt-dlp");
 
 const distube = new DisTube(client, {
   plugins: [new YtDlpPlugin({ 
-    update: false,
-    // Socket timeout para evitar que yt-dlp se cuelgue indefinidamente
-    yt_dlp_exec: {
-      socketTimeout: YT_DLP_SOCKET_TIMEOUT,
-      requestTimeout: YT_DLP_REQUEST_TIMEOUT
-    }
+    update: false
   })],
   ffmpeg: DEFAULT_FFMPEG,
   nsfw: false,
   emitNewSongOnly: true,
-  savePreviousSongs: true,
-  // Aumentar timeouts globales de DisTube
-  joinNewVoiceChannel: true,
-  leaveOnFinish: false,
-  leaveOnStop: true,
-  searchSongs: 1
+  savePreviousSongs: true
 });
 
 // Map para rastrear retries de canciones por guild
