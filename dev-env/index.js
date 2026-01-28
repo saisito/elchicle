@@ -192,10 +192,6 @@ async function tryPlayWithRetries(videoUrl, channel, member, textChannel, maxAtt
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     try {
       if (globalInterrupt.enabled && globalInterrupt.guildId === channel.guild.id) return { ok: false, err: "Interrupción global activada" };
-      
-      // Forzar throttle entre resoluciones de URLs
-      await ensureUrlResolutionThrottle();
-      
       await distube.play(channel, videoUrl, { textChannel, member, skip: false });
       return { ok: true };
     } catch (err) {
@@ -741,6 +737,10 @@ client.on("messageCreate", async (message) => {
       let addedThisSong = false;
       for (let attempt = 1; attempt <= 2; attempt++) {
         if (globalInterrupt.enabled && globalInterrupt.guildId === message.guildId) { await safeSend(message.channel, "⛔ **Playlist interrumpida.**"); globalInterrupt.enabled = false; return; }
+        
+        // Throttle antes de intentar agregar la canción
+        await ensureUrlResolutionThrottle();
+        
         const res = await tryPlayWithRetries(videoUrl, channel, message.member, message.channel, MAX_PLAY_RETRIES);
         if (res.ok) { added++; addedThisSong = true; break; }
         else if (res.err && res.err.includes("EBUSY")) { await sleep(500); continue; }
