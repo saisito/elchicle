@@ -14,34 +14,27 @@ echo "[entrypoint] starting: checking cookies..."
 SOURCE_URL=${GIST_RAW_URL:-${YT_DLP_COOKIES_URL:-}}
 if [ -n "${SOURCE_URL:-}" ]; then
   echo "[entrypoint] ============================================"
-  echo "[entrypoint] Cookies source URL: ${SOURCE_URL}"
+  echo "[entrypoint] Downloading cookies from: ${SOURCE_URL}"
   echo "[entrypoint] Target path: ${COOKIES_PATH}"
   echo "[entrypoint] ============================================"
   mkdir -p "$(dirname "${COOKIES_PATH}")"
   
   if command -v curl >/dev/null 2>&1; then
-    # If a GitHub token is provided, use it to fetch private gists.
-    if [ -n "${GITHUB_TOKEN:-}" ]; then
-      echo "[entrypoint] Using authenticated GitHub request..."
-      if curl -fsSL -v -H "Authorization: token ${GITHUB_TOKEN}" "${SOURCE_URL}" -o "${COOKIES_PATH}" 2>&1; then
-        echo "[entrypoint] ✅ Cookies downloaded successfully (authenticated)"
-        ls -lh "${COOKIES_PATH}"
-      else
-        echo "[entrypoint] ❌ FAILED to download cookies with GitHub token" >&2
-        echo "[entrypoint] Check: 1) GITHUB_TOKEN is valid, 2) URL is correct, 3) Gist is accessible" >&2
-        exit 2
-      fi
+    echo "[entrypoint] Attempting to download cookies..."
+    DOWNLOAD_OUTPUT=$(mktemp)
+    if curl -fsSL --connect-timeout 10 --max-time 30 "${SOURCE_URL}" -o "${COOKIES_PATH}" 2>"${DOWNLOAD_OUTPUT}"; then
+      FILE_SIZE=$(wc -c < "${COOKIES_PATH}")
+      echo "[entrypoint] ✅ Cookies downloaded successfully (${FILE_SIZE} bytes)"
+      head -n 3 "${COOKIES_PATH}" | sed 's/^/[entrypoint] /'
     else
-      echo "[entrypoint] Downloading cookies (public URL)..."
-      if curl -fsSL -v "${SOURCE_URL}" -o "${COOKIES_PATH}" 2>&1; then
-        echo "[entrypoint] ✅ Cookies downloaded successfully"
-        ls -lh "${COOKIES_PATH}"
-      else
-        echo "[entrypoint] ❌ FAILED to download cookies from: ${SOURCE_URL}" >&2
-        echo "[entrypoint] Check: 1) URL is correct and ends with /raw, 2) Gist/file is public, 3) Network access" >&2
-        exit 2
-      fi
+      ERROR_MSG=$(cat "${DOWNLOAD_OUTPUT}")
+      echo "[entrypoint] ❌ FAILED to download cookies" >&2
+      echo "[entrypoint] Error: ${ERROR_MSG}" >&2
+      echo "[entrypoint] URL: ${SOURCE_URL}" >&2
+      rm -f "${DOWNLOAD_OUTPUT}" "${COOKIES_PATH}"
+      echo "[entrypoint] Bot will start but YouTube requests may fail without cookies" >&2
     fi
+    rm -f "${DOWNLOAD_OUTPUT}"
   else
     echo "[entrypoint] ❌ curl not available inside image" >&2
     exit 3

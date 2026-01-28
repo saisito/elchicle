@@ -214,6 +214,10 @@ const client = new Client({
   ]
 });
 
+// Auto-disconnect: Map para almacenar timers de desconexión por guild
+const autoDisconnectTimers = new Map();
+const AUTO_DISCONNECT_DELAY = 1 * 60 * 1000; // 1 minuto en milisegundos
+
 // Si el entrypoint ya descargó/filtró cookies en /app/cookies/youtube.txt, expónlas
 // a yt-dlp antes de instanciar el plugin para que éste pase --cookies automáticamente.
 try {
@@ -281,15 +285,75 @@ distube
         catch { msg = String(error); }
       }
       if (msg.includes("Sign in to confirm you're not a bot")) msg = "Error de autenticación de YouTube. Se requieren cookies. Contacta al administrador.";
-      if (/FFMPEG_EXITED|ffmpeg exited/i.test(msg)) {
-        msg += `\nSugerencias:\n1) Verifica que ffmpeg exista en '${DEFAULT_FFMPEG}' (o define FFMPEG_PATH).\n2) Revisa logs 'DisTube:debug' para ver la línea de comando de ffmpeg.\n3) En Railway, la imagen instala ffmpeg; si falla, revisa permisos o falta de certificados.`;
-      }
       const target = queue?.textChannel;
       if (target) safeSend(target, `❌ **ERROR**: ${msg.substring(0, 1000)}`);
     } catch (e) {
       console.error("Error en manejador de 'error' de DisTube:", e);
     }
   });
+
+// ================== Auto-disconnect cuando el bot está solo ==================
+client.on("voiceStateUpdate", (oldState, newState) => {
+  const botId = client.user.id;
+  const guild = newState.guild || oldState.guild;
+  
+  // Encontrar el canal donde está el bot
+  const botVoiceChannel = guild.members.cache.get(botId)?.voice?.channel;
+  
+  if (!botVoiceChannel) {
+    // Bot no está en ningún canal, cancelar timer si existe
+    if (autoDisconnectTimers.has(guild.id)) {
+      clearTimeout(autoDisconnectTimers.get(guild.id));
+      autoDisconnectTimers.delete(guild.id);
+    }
+    return;
+  }
+  
+  // Contar usuarios reales (sin bots) en el canal
+  const realUsers = botVoiceChannel.members.filter(member => !member.user.bot);
+  
+  if (realUsers.size === 0) {
+    // Solo el bot está en el canal, iniciar timer si no existe
+    if (!autoDisconnectTimers.has(guild.id)) {
+      console.log(`[Auto-disconnect] Bot solo en canal de ${guild.name}. Timer de ${AUTO_DISCONNECT_DELAY / 1000 / 60} min iniciado.`);
+      
+      const timer = setTimeout(async () => {
+        try {
+          console.log(`[Auto-disconnect] Ejecutando auto-disconnect en ${guild.name}`);
+          
+          // Usar la misma lógica que !interrupt
+          globalInterrupt.enabled = true;
+          globalInterrupt.guildId = guild.id;
+          playIntroFlag = true;
+          
+          const queue = distube.getQueue(guild.id);
+          if (queue) {
+            queue.stop();
+            try { distube.voices.leave(guild.id); } catch (e) { console.error("Error al salir del canal de voz:", e); }
+            await safeSend(queue.textChannel, "👋 Me desconecto del canal de voz por inactividad (sin usuarios por 1 minuto).");
+          } else {
+            try { distube.voices.leave(guild.id); } catch (e) { console.error("Error forzando desconexión:", e); }
+          }
+          
+          setTimeout(() => { if (globalInterrupt.guildId === guild.id) { globalInterrupt.enabled = false; globalInterrupt.guildId = null; } }, 5000);
+        } catch (error) {
+          console.error("[Auto-disconnect] Error al desconectar:", error);
+        } finally {
+          autoDisconnectTimers.delete(guild.id);
+        }
+      }, AUTO_DISCONNECT_DELAY);
+      
+      autoDisconnectTimers.set(guild.id, timer);
+    }
+  } else {
+    // Hay usuarios reales en el canal, cancelar timer
+    if (autoDisconnectTimers.has(guild.id)) {
+      console.log(`[Auto-disconnect] Usuario detectado en ${guild.name}. Timer cancelado.`);
+      clearTimeout(autoDisconnectTimers.get(guild.id));
+      autoDisconnectTimers.delete(guild.id);
+    }
+  }
+});
 
 // ================== Comandos (messageCreate) ==================
 client.on("messageCreate", async (message) => {
@@ -306,7 +370,7 @@ client.on("messageCreate", async (message) => {
         { name: "🎶 !play [url/búsqueda]", value: "Reproduce un enlace o hace una búsqueda en YT" },
         { name: "📃 !playlist [url]", value: "Carga una playlist de YouTube/YouTube Music en la cola" },
         { name: "⏭️ !skip", value: "Salta la canción actual" },
-        { name: "🛑 !stop", value: "Detiene la reproducción y limpia la cola" },
+        { name: "🛑 !interrupt", value: "Detiene la reproducción y limpia la cola" },
         { name: "📋 !queue", value: "Muestra la cola de reproducción actual" },
         { name: "🗑️ !remove [índice]", value: "Elimina una canción de la cola por su índice" },
         { name: "⏸️ !pause", value: "Pausa la reproducción" },
