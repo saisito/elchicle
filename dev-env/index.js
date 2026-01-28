@@ -96,8 +96,8 @@ http.createServer((req, res) => {
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const ENQUEUE_DELAY_MS = 450;
-const YT_DLP_BACKOFF_MS = 500;
+const ENQUEUE_DELAY_MS = 800; // Aumentado de 450ms a 800ms
+const YT_DLP_BACKOFF_MS = 1000; // Aumentado de 500ms a 1000ms
 const MAX_PLAY_RETRIES = 6;
 
 const isWindows = process.platform === "win32";
@@ -244,13 +244,41 @@ try {
 const { YtDlpPlugin } = await import("@distube/yt-dlp");
 
 const distube = new DisTube(client, {
-  // Configuración simple - las opciones se pasan por variables de entorno
   plugins: [new YtDlpPlugin({ 
     update: false
   })],
   ffmpeg: DEFAULT_FFMPEG,
-  nsfw: false
+  nsfw: false,
+  emitNewSongOnly: true,
+  savePreviousSongs: true
 });
+
+// Map para rastrear retries de canciones por guild
+const songRetries = new Map();
+
+// Renovar cookies cada 30 minutos
+setInterval(async () => {
+  const cookiesUrl = process.env.YT_DLP_COOKIES_URL;
+  if (cookiesUrl) {
+    try {
+      console.log("🔄 Renovando cookies de YouTube...");
+      await downloadCookies();
+      console.log("✅ Cookies renovadas exitosamente");
+      
+      // Verificar que las cookies se descargaron correctamente
+      const cookiesPath = process.env.YT_DLP_COOKIES || '/app/cookies/youtube.txt';
+      const fs = require('fs');
+      if (fs.existsSync(cookiesPath)) {
+        const stats = fs.statSync(cookiesPath);
+        console.log(`📊 Cookies file size: ${stats.size} bytes, modified: ${stats.mtime}`);
+      } else {
+        console.error("⚠️ Cookies file not found after download!");
+      }
+    } catch (error) {
+      console.error("❌ Error renovando cookies:", error.message);
+    }
+  }
+}, 30 * 60 * 1000); // 30 minutos
 
 // ================== Eventos DisTube ==================
 distube
@@ -265,15 +293,36 @@ distube
       const preview = playlist.songs.slice(0, 5).map((s, i) => `${i + 1}. ${s.name || "Desconocida"}`).join("\n");
       safeSend(queue.textChannel, "🔎 Primeras 5 canciones:\n```\n" + preview + "\n```");
     }
+    
+    // Pausa durante 2 segundos para permitir que yt-dlp termine de expandir la playlist
+    // y FFmpeg se inicialice correctamente
+    if (queue.playing && playlist.songs.length > 1) {
+      queue.pause();
+      safeSend(queue.textChannel, "⏸️ Esperando a que se cargue la playlist...");
+      setTimeout(() => {
+        try { queue.resume(); }
+        catch (e) { console.error("Error al reanudar después de delay de playlist:", e); }
+      }, 2000);
+    }
   })
   .on("addSong", (queue, song) => safeSend(queue.textChannel, `➕ Añadido: \`${song.name || "Desconocida"}\``))
   .on("playSong", (queue, song) => {
-    const idx = Math.max(0, queue.songs.findIndex(s => s.id === song.id)) + 1;
-    safeSend(queue.textChannel, `▶️ Reproduciendo (${idx}/${queue.songs.length}): \`${song.name || "Desconocida"}\``);
+    // Calcular la posición correcta basada en previousSongs
+    const totalPlayed = queue.previousSongs?.length || 0;
+    const totalSongs = totalPlayed + queue.songs.length;
+    const currentPos = totalPlayed + 1;
+    safeSend(queue.textChannel, `▶️ Reproduciendo (${currentPos}/${totalSongs}): \`${song.name || "Desconocida"}\``);
+    
+    // Limpiar retries de canciones anteriores cuando una se reproduce exitosamente
+    const guildId = queue.id || queue.voiceChannel?.guild?.id;
+    if (guildId && song?.id) {
+      const retryKey = `${guildId}-${song.id}`;
+      songRetries.delete(retryKey);
+    }
   })
   .on("finish", (queue) => safeSend(queue.textChannel, "✅ Reproducción terminada."))
   .on("empty", (queue) => safeSend(queue.textChannel, "👋 Canal de voz vacío. Me desconecto."))
-  .on("error", (error, queue) => {
+  .on("error", async (error, queue) => {
     // Firma correcta en DisTube v5: (error, queue)
     try {
       console.error("Error de DisTube:", error);
@@ -284,6 +333,58 @@ distube
         try { msg = JSON.stringify(error, (k, v) => (["distube", "voice", "client", "queue"].includes(k) ? "[Circular]" : v)); }
         catch { msg = String(error); }
       }
+      
+      // Si es error de FFmpeg, intentar retry
+      if (/FFMPEG_EXITED|ffmpeg exited/i.test(msg) && queue) {
+        const guildId = queue.id || queue.voiceChannel?.guild?.id;
+        const currentSong = queue.songs[0];
+        
+        if (guildId && currentSong) {
+          const retryKey = `${guildId}-${currentSong.id}`;
+          const retries = songRetries.get(retryKey) || 0;
+          
+          if (retries < 1) {
+            // Primer error: retry
+            songRetries.set(retryKey, retries + 1);
+            console.log(`[Retry] Reintentando canción ${currentSong.name} (intento ${retries + 1}/1)`);
+            safeSend(queue.textChannel, `🔄 Reintentando: \`${currentSong.name}\`...`);
+            
+            // Esperar un poco antes de reintentar
+            await sleep(1500);
+            
+            try {
+              // Verificar que aún hay cola y canción antes de skip
+              if (queue.songs.length > 0 && queue.playing) {
+                queue.skip();
+              } else {
+                console.log("[Retry] Cola vacía o no reproduciendo, no se puede retry");
+              }
+              return; // No mostrar error aún
+            } catch (e) {
+              console.error("Error en retry:", e);
+            }
+          } else {
+            // Segundo error: skip
+            songRetries.delete(retryKey);
+            console.log(`[Retry] Saltando canción ${currentSong.name} después de ${retries + 1} intentos`);
+            safeSend(queue.textChannel, `⏭️ Saltando \`${currentSong.name}\` después de 2 intentos fallidos`);
+            
+            try {
+              // Verificar que aún hay más canciones antes de skip
+              if (queue.songs.length > 1) {
+                queue.skip();
+              } else {
+                console.log("[Retry] No hay más canciones en la cola, deteniendo...");
+                queue.stop();
+              }
+            } catch (e) {
+              console.error("Error al hacer skip:", e);
+            }
+            return; // No mostrar error
+          }
+        }
+      }
+      
       if (msg.includes("Sign in to confirm you're not a bot")) msg = "Error de autenticación de YouTube. Se requieren cookies. Contacta al administrador.";
       const target = queue?.textChannel;
       if (target) safeSend(target, `❌ **ERROR**: ${msg.substring(0, 1000)}`);
