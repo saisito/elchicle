@@ -240,23 +240,33 @@ const AUTO_DISCONNECT_DELAY = 1 * 60 * 1000; // 1 minuto en milisegundos
 // Si el entrypoint ya descargó/filtró cookies en /app/cookies/youtube.txt, expónlas
 // a yt-dlp antes de instanciar el plugin para que éste pase --cookies automáticamente.
 try {
-  // Intentar descargar cookies en runtime (si YT_DLP_COOKIES_URL está configurada).
-  // Hacemos esto antes de importar/instanciar el plugin para asegurarnos de que
-  // la variable de entorno YT_DLP_COOKIES esté disponible cuando YtDlpPlugin
-  // construya sus argumentos y pase --cookies a yt-dlp.
-  try {
-    await downloadCookies();
-  } catch (e) {
-    console.warn("⚠️ downloadCookies falló o no estaba configurado; continuando:", e?.message || e);
+  const cookiesPath = "/app/cookies/youtube.txt";
+  
+  // Primero verificar si el entrypoint ya preparó las cookies
+  if (fs.existsSync(cookiesPath)) {
+    const stats = fs.statSync(cookiesPath);
+    if (stats.size > 1000) { // Verificar que no esté vacío
+      process.env.YT_DLP_COOKIES = cookiesPath;
+      console.log(`✅ Cookies detectadas en ${cookiesPath} (${stats.size} bytes)`);
+    }
   }
-
-  const possible = "/app/cookies/youtube.txt";
-  if (fs.existsSync(possible)) {
-    process.env.YT_DLP_COOKIES = process.env.YT_DLP_COOKIES || possible;
-    console.log(`⚙️ Detected cookies file at ${possible}, setting YT_DLP_COOKIES env var`);
+  
+  // Si aún no hay cookies, intentar descargar desde YT_DLP_COOKIES_URL
+  if (!process.env.YT_DLP_COOKIES && process.env.YT_DLP_COOKIES_URL) {
+    console.log("🍪 Descargando cookies desde URL...");
+    try {
+      await downloadCookies();
+    } catch (e) {
+      console.error("❌ Fallo al descargar cookies:", e?.message || e);
+    }
   }
 } catch (e) {
-  // ignore
+  console.error("Error al configurar cookies:", e?.message || e);
+}
+
+// Verificar una última vez que tenemos cookies antes de instanciar el plugin
+if (!process.env.YT_DLP_COOKIES) {
+  console.warn("⚠️  ADVERTENCIA: No se encontraron cookies. yt-dlp puede fallar con algunos videos.");
 }
 
 // Importar el plugin dinámicamente DESPUÉS de configurar env vars para evitar que se impriman warnings
