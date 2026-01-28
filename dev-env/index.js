@@ -96,9 +96,11 @@ http.createServer((req, res) => {
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const ENQUEUE_DELAY_MS = 800; // Aumentado de 450ms a 800ms
-const YT_DLP_BACKOFF_MS = 1000; // Aumentado de 500ms a 1000ms
+const ENQUEUE_DELAY_MS = 1500; // Aumentado de 450ms a 1500ms para evitar rate limiting
+const YT_DLP_BACKOFF_MS = 2000; // Aumentado de 500ms a 2000ms
 const MAX_PLAY_RETRIES = 6;
+const RETRY_DELAY_MS = 2500; // Delay entre reintentos
+const PLAYLIST_DELAY_MS = 3500; // Delay después de expandir playlist
 
 const isWindows = process.platform === "win32";
 // Nota: ahora preferimos usar el binario incluido por yt-dlp-exec.
