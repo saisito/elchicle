@@ -96,11 +96,13 @@ http.createServer((req, res) => {
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const ENQUEUE_DELAY_MS = 1500; // Aumentado de 450ms a 1500ms para evitar rate limiting
-const YT_DLP_BACKOFF_MS = 2000; // Aumentado de 500ms a 2000ms
+const ENQUEUE_DELAY_MS = 4000; // Delay antes de enqueue: YouTube rate limit muy agresivo
+const YT_DLP_BACKOFF_MS = 3500; // Backoff entre resolutiones de URLs
 const MAX_PLAY_RETRIES = 6;
-const RETRY_DELAY_MS = 2500; // Delay entre reintentos
-const PLAYLIST_DELAY_MS = 3500; // Delay después de expandir playlist
+const RETRY_DELAY_MS = 3000; // Delay entre reintentos
+const PLAYLIST_DELAY_MS = 4500; // Delay después de expandir playlist
+const YT_DLP_SOCKET_TIMEOUT = 30000; // Timeout 30s para yt-dlp (evita cuelgues)
+const YT_DLP_REQUEST_TIMEOUT = 25000; // Timeout 25s para requests HTTP de yt-dlp
 
 const isWindows = process.platform === "win32";
 // Nota: ahora preferimos usar el binario incluido por yt-dlp-exec.
@@ -171,10 +173,29 @@ async function getPlaylistItems(url) {
   }
 }
 
+async function ensureUrlResolutionThrottle() {
+  // Forzar un delay mínimo entre resoluciones de URLs para evitar rate limiting de YouTube
+  const now = Date.now();
+  const elapsed = now - lastUrlResolutionTime;
+  const minDelay = YT_DLP_BACKOFF_MS;
+  
+  if (elapsed < minDelay) {
+    const waitTime = minDelay - elapsed;
+    console.log(`⏳ Throttle URL: esperando ${waitTime}ms para evitar rate limit`);
+    await sleep(waitTime);
+  }
+  
+  lastUrlResolutionTime = Date.now();
+}
+
 async function tryPlayWithRetries(videoUrl, channel, member, textChannel, maxAttempts = MAX_PLAY_RETRIES) {
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     try {
       if (globalInterrupt.enabled && globalInterrupt.guildId === channel.guild.id) return { ok: false, err: "Interrupción global activada" };
+      
+      // Forzar throttle entre resoluciones de URLs
+      await ensureUrlResolutionThrottle();
+      
       await distube.play(channel, videoUrl, { textChannel, member, skip: false });
       return { ok: true };
     } catch (err) {
@@ -247,16 +268,29 @@ const { YtDlpPlugin } = await import("@distube/yt-dlp");
 
 const distube = new DisTube(client, {
   plugins: [new YtDlpPlugin({ 
-    update: false
+    update: false,
+    // Socket timeout para evitar que yt-dlp se cuelgue indefinidamente
+    yt_dlp_exec: {
+      socketTimeout: YT_DLP_SOCKET_TIMEOUT,
+      requestTimeout: YT_DLP_REQUEST_TIMEOUT
+    }
   })],
   ffmpeg: DEFAULT_FFMPEG,
   nsfw: false,
   emitNewSongOnly: true,
-  savePreviousSongs: true
+  savePreviousSongs: true,
+  // Aumentar timeouts globales de DisTube
+  joinNewVoiceChannel: true,
+  leaveOnFinish: false,
+  leaveOnStop: true,
+  searchSongs: 1
 });
 
 // Map para rastrear retries de canciones por guild
 const songRetries = new Map();
+
+// Throttle para resoluciones de URLs (evita rate limiting de YouTube)
+let lastUrlResolutionTime = 0;
 
 // Renovar cookies cada 30 minutos
 setInterval(async () => {
@@ -341,7 +375,7 @@ distube
         const guildId = queue.id || queue.voiceChannel?.guild?.id;
         const currentSong = queue.songs[0];
         
-        if (guildId && currentSong) {
+        if (guildId && currentSong && queue.songs.length > 0) {
           const retryKey = `${guildId}-${currentSong.id}`;
           const retries = songRetries.get(retryKey) || 0;
           
@@ -352,7 +386,7 @@ distube
             safeSend(queue.textChannel, `🔄 Reintentando: \`${currentSong.name}\`...`);
             
             // Esperar un poco antes de reintentar
-            await sleep(1500);
+            await sleep(RETRY_DELAY_MS);
             
             try {
               // Verificar que aún hay cola y canción antes de skip
@@ -362,8 +396,9 @@ distube
                 console.log("[Retry] Cola vacía o no reproduciendo, no se puede retry");
               }
               return; // No mostrar error aún
-            } catch (e) {
-              console.error("Error en retry:", e);
+            } catch (skipErr) {
+              console.error("[Retry] Error en skip:", skipErr.message);
+              return;
             }
           } else {
             // Segundo error: skip
@@ -379,8 +414,8 @@ distube
                 console.log("[Retry] No hay más canciones en la cola, deteniendo...");
                 queue.stop();
               }
-            } catch (e) {
-              console.error("Error al hacer skip:", e);
+            } catch (skipErr) {
+              console.error("[Retry] Error en skip final:", skipErr.message);
             }
             return; // No mostrar error
           }
